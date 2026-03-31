@@ -6,7 +6,6 @@ pub mod scanner;
 pub mod ai;
 pub mod plugins;
 pub mod tui;
-pub mod splash;
 
 pub use core::{Incident, Vendor, Connection, VelocityEstimate, BlastRadius};
 pub use data::Database;
@@ -29,3 +28,5 @@ pub fn data_dir() -> Result<PathBuf> {
 pub fn db_path() -> Result<PathBuf> {
     Ok(data_dir()?.join("data.db"))
 }
+pub mod theme;
+pub mod splash;

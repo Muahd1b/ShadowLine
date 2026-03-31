@@ -755,11 +755,13 @@ async fn run_tui_loop(
 ) -> anyhow::Result<()> {
     use crossterm::event::{self, Event, KeyCode, KeyEventKind};
     use ratatui::{
-        layout::{Constraint, Direction, Layout},
+        layout::{Constraint, Direction, Layout, Rect},
         style::{Color, Modifier, Style},
         text::{Line, Span},
-        widgets::{Block, Borders, Paragraph, Wrap},
+        widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wrap},
     };
+    
+    let theme = shadowline::theme::Theme::new();
 
     let mut term_history: Vec<String> = vec![];
 
@@ -786,10 +788,16 @@ async fn run_tui_loop(
                 .split(outer[0]);
 
             // Status pane - cyan theme with scroll
-            let status_block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Rgb(0, 200, 255))) // Cyan
-            .title(Span::styled(" Status ", Style::default().fg(Color::Rgb(0, 200, 255)).add_modifier(Modifier::BOLD)));
+            let status_scroll_pos = if dash.status_lines.is_empty() {
+            "0/0".to_string()
+            } else {
+            format!("{}/{}", dash.status_scroll + 1, dash.status_lines.len())
+    };
+    let status_block = Block::default()
+      .borders(Borders::ALL)
+      .border_style(Style::default().fg(Color::Rgb(0, 200, 255))) // Cyan
+      .title(Span::styled(" Status ", Style::default().fg(Color::Rgb(0, 200, 255)).add_modifier(Modifier::BOLD)))
+      .title_bottom(Span::styled(status_scroll_pos, Style::default().fg(Color::Rgb(0, 200, 255))));
             let status_p = Paragraph::new(
             dash.status_lines.iter().map(|l| Line::from(l.clone())).collect::<Vec<_>>(),
             )
@@ -799,10 +807,16 @@ async fn run_tui_loop(
         frame.render_widget(status_p, top[0]);
 
             // Velocity pane - yellow/orange theme with scroll
-            let velocity_block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Rgb(255, 170, 0))) // Orange
-                .title(Span::styled(" Velocity ", Style::default().fg(Color::Rgb(255, 170, 0)).add_modifier(Modifier::BOLD)));
+            let velocity_scroll_pos = if dash.velocity_lines.is_empty() {
+            "0/0".to_string()
+            } else {
+            format!("{}/{}", dash.velocity_scroll + 1, dash.velocity_lines.len())
+    };
+    let velocity_block = Block::default()
+      .borders(Borders::ALL)
+      .border_style(Style::default().fg(Color::Rgb(255, 170, 0))) // Orange
+      .title(Span::styled(" Velocity ", Style::default().fg(Color::Rgb(255, 170, 0)).add_modifier(Modifier::BOLD)))
+      .title_bottom(Span::styled(velocity_scroll_pos, Style::default().fg(Color::Rgb(255, 170, 0))));
             let vel_p = Paragraph::new(
                 dash.velocity_lines.iter().map(|l| Line::from(l.clone())).collect::<Vec<_>>(),
             )
@@ -812,10 +826,16 @@ async fn run_tui_loop(
             frame.render_widget(vel_p, top[1]);
 
             // Scan pane - magenta/purple theme with scroll
-            let scan_block = Block::default()
-            .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Rgb(200, 100, 255))) // Purple
-            .title(Span::styled(" Scan ", Style::default().fg(Color::Rgb(200, 100, 255)).add_modifier(Modifier::BOLD)));
+            let scan_scroll_pos = if dash.scan_lines.is_empty() {
+            "0/0".to_string()
+            } else {
+            format!("{}/{}", dash.scan_scroll + 1, dash.scan_lines.len())
+    };
+    let scan_block = Block::default()
+      .borders(Borders::ALL)
+      .border_style(Style::default().fg(Color::Rgb(200, 100, 255))) // Purple
+      .title(Span::styled(" Scan ", Style::default().fg(Color::Rgb(200, 100, 255)).add_modifier(Modifier::BOLD)))
+      .title_bottom(Span::styled(scan_scroll_pos, Style::default().fg(Color::Rgb(200, 100, 255))));
             let scan_p = Paragraph::new(
                 dash.scan_lines.iter().map(|l| Line::from(l.clone())).collect::<Vec<_>>(),
             )
@@ -854,7 +874,7 @@ async fn run_tui_loop(
         terminal_content.push(Line::from(vec![
             Span::styled("> ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
             Span::raw(&dash.command_input),
-            Span::styled("█", Style::default().fg(Color::Green)),
+            Span::styled("▋", Style::default().fg(Color::Green)),
         ]));
 
         let term_block = Block::default()

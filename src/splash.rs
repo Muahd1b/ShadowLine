@@ -1,91 +1,93 @@
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Margin},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph},
     DefaultTerminal,
 };
 use crossterm::event::{self, Event};
 use std::time::Duration;
 
-pub async fn show_splash_screen(terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
-    // Simpler, smaller ShadowLine ASCII art
-    let shadowline_art = vec![
-        "",
-        "  ____  _                _       _     _       _     ",
-        " / ___|| |__   __ _ _ __| | __ _| |   (_) __ _| |___ ",
-        " \\___ \\| '_ \\ / _` | '__| |/ _` | |   | |/ _` | / __|",
-        "  ___) | | | | (_| | |  | | (_| | |___| | (_| | \\__ \\",
-        " |____/|_| |_|\\__,_|_|  |_|\\__, |_____|_|\\__,_|_|___/",
-        "                           |___/                       ",
-        "",
-    ];
+// ANSI Shadow figlet art - ShadowLine (centered, compact)
+const SHADOWLINE_ART: [&str; 6] = [
+    "███████╗██╗  ██╗ █████╗ ██████╗  ██████╗ ██╗    ██╗██╗     ██╗███╗   ██╗███████╗",
+    "██╔════╝██║  ██║██╔══██╗██╔══██╗██╔═══██╗██║    ██║██║     ██║████╗  ██║██╔════╝",
+    "███████╗███████║███████║██║  ██║██║   ██║██║ █╗ ██║██║     ██║██╔██╗ ██║█████╗  ",
+    "╚════██║██╔══██║██╔══██║██║  ██║██║   ██║██║███╗██║██║     ██║██║╚██╗██║██╔══╝  ",
+    "███████║██║  ██║██║  ██║██████╔╝╚██████╔╝╚███╔███╔╝███████╗██║██║ ╚████║███████╗",
+    "╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝  ╚═════╝  ╚══╝╚══╝ ╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝",
+];
 
+const TAGLINE: &str = "Agentic Incident Response Engine";
+const VERSION: &str = "v0.1.0";
+
+/// Draw the splash screen centered on the full terminal area.
+pub async fn show_splash_screen(terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
+    let theme = crate::theme::Theme::new();
+    
     terminal.draw(|frame| {
         let area = frame.area();
-
-        // Clear the screen
-        frame.render_widget(Clear, area);
-
-        // Center the content vertically and horizontally
-        let vertical = Layout::vertical([
-            Constraint::Percentage(30),
-            Constraint::Percentage(40),
-            Constraint::Percentage(30),
-        ]).split(area);
-
-        let horizontal = Layout::horizontal([
-            Constraint::Percentage(20),
-            Constraint::Percentage(60),
-            Constraint::Percentage(20),
-        ]).split(vertical[1]);
-
-        let center_area = horizontal[1];
-
-        // Create a block with green border like OpenShell
+        
+        // Calculate modal size
+        let art_width = 80u16;
+        let art_height = 14u16;
+        let modal_width = art_width.min(area.width.saturating_sub(4));
+        let modal_height = art_height.min(area.height.saturating_sub(4));
+        
+        // Center the modal
+        let popup = centered_rect(modal_width, modal_height, area);
+        
+        // Clear the area behind the modal
+        frame.render_widget(Clear, popup);
+        
+        // Outer double-line border
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Rgb(0, 255, 135)));
-
-        let inner = block.inner(center_area);
-        frame.render_widget(block, center_area);
-
-        // Split inner area for logo, subtitle, and prompt
-        let content_layout = Layout::vertical([
-            Constraint::Min(1),
-            Constraint::Length(shadowline_art.len() as u16),
-            Constraint::Length(2),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(1),
-        ]).split(inner);
-
-        // Render the ASCII art
-        let art_text = Text::from(shadowline_art.into_iter().map(Line::from).collect::<Vec<_>>());
-        let art_widget = Paragraph::new(art_text)
-            .alignment(Alignment::Center)
-            .wrap(Wrap { trim: false });
-        frame.render_widget(art_widget, content_layout[1]);
-
-        // Subtitle
-        let subtitle = Paragraph::new("Agentic Incident Response Engine")
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(Color::Gray));
-        frame.render_widget(subtitle, content_layout[2]);
-
-        // Version
-        let version = Paragraph::new("v0.1.0 ALPHA")
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(Color::Rgb(0, 255, 135)).add_modifier(Modifier::BOLD));
-        frame.render_widget(version, content_layout[3]);
-
-        // Press any key prompt
-        let prompt = Paragraph::new("press any key ▋")
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(Color::Rgb(0, 255, 135)));
-        frame.render_widget(prompt, content_layout[4]);
+            .border_type(BorderType::Double)
+            .border_style(theme.border)
+            .padding(Padding::new(2, 2, 1, 1));
+        
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+        
+        // Split inner area: art + tagline + spacer + footer
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(6),   // ShadowLine ASCII art
+                Constraint::Length(2),   // Blank + tagline
+                Constraint::Length(1), // Version + ALPHA
+                Constraint::Length(1), // Prompt
+            ])
+            .split(inner);
+        
+        // -- Art --
+        let art_lines: Vec<Line<'_>> = SHADOWLINE_ART
+            .iter()
+            .map(|line| Line::from(Span::styled(*line, theme.heading)))
+            .collect();
+        frame.render_widget(
+            Paragraph::new(art_lines).alignment(Alignment::Center),
+            chunks[0],
+        );
+        
+        // -- Tagline --
+        let tagline = Paragraph::new(Span::styled(TAGLINE, theme.muted))
+            .alignment(Alignment::Center);
+        frame.render_widget(tagline, chunks[1]);
+        
+        // -- Footer: version + ALPHA --
+        let footer = Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled(VERSION, theme.accent),
+                Span::raw(" "),
+                Span::styled("ALPHA", theme.title_bar),
+            ]).alignment(Alignment::Center),
+            Line::from(Span::styled("press any key ▋", theme.muted)).alignment(Alignment::Center),
+        ]);
+        frame.render_widget(footer, chunks[2]);
     })?;
-
+    
     // Wait for any key press
     loop {
         if event::poll(Duration::from_millis(50))? {
@@ -94,6 +96,28 @@ pub async fn show_splash_screen(terminal: &mut DefaultTerminal) -> anyhow::Resul
             }
         }
     }
-
+    
     Ok(())
+}
+
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let vert = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length((area.height.saturating_sub(height)) / 2),
+            Constraint::Length(height),
+            Constraint::Min(0),
+        ])
+        .split(area);
+    
+    let horiz = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length((area.width.saturating_sub(width)) / 2),
+            Constraint::Length(width),
+            Constraint::Min(0),
+        ])
+        .split(vert[1]);
+    
+    horiz[1]
 }
