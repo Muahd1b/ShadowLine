@@ -857,13 +857,13 @@ async fn run_tui_loop(
             let end = (start + visible_lines).min(dash.output_lines.len());
             let display_lines: Vec<Line> = dash.output_lines[start..end]
                 .iter()
-                .map(|l| Line::from(l.as_str()))
+                .map(|l| Line::from(l.clone()))
                 .collect();
 
             frame.render_widget(
                 Paragraph::new(display_lines)
                     .block(Block::default().borders(Borders::ALL).title(
-                        &format!(" Output ({} lines, scroll: ↑↓) ", dash.output_lines.len()),
+                        format!(" Output ({} lines, scroll: ud) ", dash.output_lines.len()),
                     ))
                     .wrap(Wrap { trim: false }),
                 outer[1],
