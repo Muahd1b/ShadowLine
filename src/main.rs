@@ -758,6 +758,8 @@ async fn run_tui_loop(
         widgets::{Block, Borders, Paragraph, Wrap},
     };
 
+    let mut term_history: Vec<String> = vec![];
+
     loop {
         terminal.draw(|frame| {
             let area = frame.area();
@@ -774,14 +776,70 @@ async fn run_tui_loop(
             let top = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
-                    Constraint::Percentage(25),
-                    Constraint::Percentage(25),
-                    Constraint::Percentage(25),
-                    Constraint::Percentage(25),
+                    Constraint::Percentage(33),
+                    Constraint::Percentage(33),
+                    Constraint::Percentage(34),
                 ])
                 .split(outer[0]);
 
-            // Top-left: Commands reference
+            // Status pane
+            let status_p = Paragraph::new(
+                dash.status_lines.iter().map(|l| Line::from(l.clone())).collect::<Vec<_>>(),
+            )
+            .block(Block::default().borders(Borders::ALL).title(" Status "))
+            .wrap(Wrap { trim: false });
+            frame.render_widget(status_p, top[0]);
+
+            // Velocity pane
+            let vel_p = Paragraph::new(
+                dash.velocity_lines.iter().map(|l| Line::from(l.clone())).collect::<Vec<_>>(),
+            )
+            .block(Block::default().borders(Borders::ALL).title(" Velocity "))
+            .wrap(Wrap { trim: false });
+            frame.render_widget(vel_p, top[1]);
+
+            // Scan pane
+            let scan_p = Paragraph::new(
+                dash.scan_lines.iter().map(|l| Line::from(l.clone())).collect::<Vec<_>>(),
+            )
+            .block(Block::default().borders(Borders::ALL).title(" Scan "))
+            .wrap(Wrap { trim: false });
+            frame.render_widget(scan_p, top[2]);
+
+            // Bottom 1/3: terminal (left) + commands (right)
+            let bottom = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(66),
+                    Constraint::Percentage(34),
+                ])
+                .split(outer[1]);
+
+            // Terminal area: history + input
+            let term_area = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                ])
+                .split(bottom[0]);
+
+            let history_lines: Vec<Line> = term_history.iter().map(|l| Line::from(l.clone())).collect();
+            frame.render_widget(
+                Paragraph::new(history_lines)
+                    .block(Block::default().borders(Borders::ALL).title(" Terminal "))
+                    .wrap(Wrap { trim: false }),
+                term_area[0],
+            );
+
+            let input_line = Line::from(vec![
+                Span::styled(" > ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw(&dash.command_input),
+                Span::styled("█", Style::default().fg(Color::Green)),
+            ]);
+            frame.render_widget(Paragraph::new(input_line), term_area[1]);
+
+            // Commands reference
             let help_lines = vec![
                 Line::from(vec![Span::styled("  COMMANDS", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))]),
                 Line::from(""),
@@ -797,87 +855,8 @@ async fn run_tui_loop(
             ];
             frame.render_widget(
                 Paragraph::new(help_lines).block(Block::default().borders(Borders::ALL).title(" Commands ")),
-                top[0],
+                bottom[1],
             );
-
-            // Top row 2: Status
-            let status_lines = vec![
-                Line::from(vec![Span::styled("  STATUS", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))]),
-                Line::from(""),
-                Line::from(format!("  Vendors: {}", dash.vendors.len())),
-                Line::from(format!("  Connections: {}", dash.total_connections())),
-                Line::from(format!("  Active: {}", dash.active_connections())),
-                Line::from(""),
-                Line::from(vec![Span::styled("  No real data yet.", Style::default().fg(Color::DarkGray))]),
-                Line::from(vec![Span::styled("  Run 'init' to start.", Style::default().fg(Color::DarkGray))]),
-            ];
-            frame.render_widget(
-                Paragraph::new(status_lines).block(Block::default().borders(Borders::ALL).title(" Status ")),
-                top[1],
-            );
-
-            // Top row 3: Velocity
-            let vel_lines = vec![
-                Line::from(vec![Span::styled("  VELOCITY", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))]),
-                Line::from(""),
-                Line::from("  ┌────────────────┐"),
-                Line::from("  │                │"),
-                Line::from("  │    --:--       │"),
-                Line::from("  │    NO DATA     │"),
-                Line::from("  │                │"),
-                Line::from("  └────────────────┘"),
-                Line::from(""),
-                Line::from(vec![Span::styled("  Run 'clock' to", Style::default().fg(Color::DarkGray))]),
-                Line::from(vec![Span::styled("  see estimates.", Style::default().fg(Color::DarkGray))]),
-            ];
-            frame.render_widget(
-                Paragraph::new(vel_lines).block(Block::default().borders(Borders::ALL).title(" Velocity ")),
-                top[2],
-            );
-
-            // Top row 4: Scan
-            let scan_lines = vec![
-                Line::from(vec![Span::styled("  SCAN", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))]),
-                Line::from(""),
-                Line::from("  Last: never"),
-                Line::from(""),
-                Line::from("  Clean:     --"),
-                Line::from("  Risky:     --"),
-                Line::from("  Malicious: --"),
-                Line::from(""),
-                Line::from(vec![Span::styled("  Run 'scan .' to", Style::default().fg(Color::DarkGray))]),
-                Line::from(vec![Span::styled("  check packages.", Style::default().fg(Color::DarkGray))]),
-            ];
-            frame.render_widget(
-                Paragraph::new(scan_lines).block(Block::default().borders(Borders::ALL).title(" Scan ")),
-                top[3],
-            );
-
-            // Bottom 1/3: Command output
-            let visible_lines = outer[1].height.saturating_sub(2) as usize;
-            let start = dash.scroll_offset;
-            let end = (start + visible_lines).min(dash.output_lines.len());
-            let display_lines: Vec<Line> = dash.output_lines[start..end]
-                .iter()
-                .map(|l| Line::from(l.clone()))
-                .collect();
-
-            frame.render_widget(
-                Paragraph::new(display_lines)
-                    .block(Block::default().borders(Borders::ALL).title(
-                        format!(" Output ({} lines, scroll: ud) ", dash.output_lines.len()),
-                    ))
-                    .wrap(Wrap { trim: false }),
-                outer[1],
-            );
-
-            // Very bottom: command input
-            let input_line = Line::from(vec![
-                Span::styled(" > ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(&dash.command_input),
-                Span::styled("█", Style::default().fg(Color::Green)),
-            ]);
-            frame.render_widget(Paragraph::new(input_line), outer[2]);
         })?;
 
         if event::poll(std::time::Duration::from_millis(50))? {
@@ -889,17 +868,12 @@ async fn run_tui_loop(
                             let input = dash.command_input.clone();
                             dash.command_input.clear();
                             if !input.is_empty() {
-                                execute_tui_command(&input, &mut dash);
+                                term_history.push(format!("$ {}", input));
+                                execute_tui_command(&input, &mut dash, &mut term_history);
                             }
                         }
                         KeyCode::Backspace => {
                             dash.command_input.pop();
-                        }
-                        KeyCode::Up => {
-                            dash.scroll_up();
-                        }
-                        KeyCode::Down => {
-                            dash.scroll_down();
                         }
                         KeyCode::Char(c) => {
                             dash.command_input.push(c);
@@ -912,36 +886,18 @@ async fn run_tui_loop(
     }
 }
 
-fn execute_tui_command(input: &str, dash: &mut shadowline::tui::Dashboard) {
+fn execute_tui_command(
+    input: &str,
+    dash: &mut shadowline::tui::Dashboard,
+    history: &mut Vec<String>,
+) {
     let cmd = shadowline::tui::CommandParser::parse(input);
-    let mut output: Vec<String> = vec![];
 
     match cmd {
         shadowline::tui::Command::Quit => std::process::exit(0),
 
         shadowline::tui::Command::Help => {
-            output = vec![
-                "  Shadowline Commands".to_string(),
-                "".to_string(),
-                "  clock <incident>          Velocity estimate".to_string(),
-                "  clock <incident> --json   Velocity as JSON".to_string(),
-                "  kill <vendor>             Execute kill chain".to_string(),
-                "  kill <vendor> --dry-run   Preview kill chain".to_string(),
-                "  graph                     Show integration graph".to_string(),
-                "  graph vendor:<name>       Filter by vendor".to_string(),
-                "  blast <vendor>            Blast radius analysis".to_string(),
-                "  scan [path]               Scan for compromised packages".to_string(),
-                "  scan [path] --json        Scan output as JSON".to_string(),
-                "  drill --simulate          Run severing drill".to_string(),
-                "  drill --history           Show drill history".to_string(),
-                "  audit --verify            Verify audit log".to_string(),
-                "  audit --show              Show audit entries".to_string(),
-                "  skills list               List installed skills".to_string(),
-                "  init                      First-run setup".to_string(),
-                "  quit                      Exit".to_string(),
-                "".to_string(),
-                "  Scroll output: ↑ / ↓".to_string(),
-            ];
+            history.push("  Commands: clock, kill, graph, blast, scan, drill, audit, skills, init, quit".to_string());
         }
 
         shadowline::tui::Command::Clock { incident_id, .. } => {
@@ -975,32 +931,25 @@ fn execute_tui_command(input: &str, dash: &mut shadowline::tui::Dashboard) {
                 blast_radius: None,
             };
             let est = clock.estimate(&incident);
-            output = vec![
-                format!("  EXFILCLOCK: {}", incident_id),
+            dash.set_velocity(vec![
+                format!("  {}", incident_id),
                 "".to_string(),
-                "  ┌────────────────────────────────────┐".to_string(),
-                format!("  │  ESTIMATED TIME TO EXFILTRATION    │"),
-                "  │                                    │".to_string(),
-                format!("  │        {:.0} MINUTES                  │", est.minutes_remaining),
-                "  │                                    │".to_string(),
-                format!("  │  Confidence: {:.0}%                   │", est.confidence * 100.0),
-                format!("  │  Range: {:.0} - {:.0} min              │", est.range_low, est.range_high),
-                format!("  │  Archetype: {}     │", est.archetype.display_name()),
-                "  └────────────────────────────────────┘".to_string(),
+                "  +------------------------+".to_string(),
+                format!("  |  {:.0} MINUTES          |", est.minutes_remaining),
+                format!("  |  Confidence: {:.0}%            |", est.confidence * 100.0),
+                format!("  |  Range: {:.0}-{:.0} min       |", est.range_low, est.range_high),
+                format!("  |  {}  |", est.archetype.display_name()),
+                "  +------------------------+".to_string(),
                 "".to_string(),
-                format!("  Stage: {} ({:.0}%)", incident.current_stage.display_name(), incident.current_stage.progress() * 100.0),
+                format!("  Stage: {}", incident.current_stage.display_name()),
                 "".to_string(),
-                "  TTPs observed:".to_string(),
-                "    T1078 - Valid Accounts (initial-access)".to_string(),
-                "    T1087 - Account Discovery (discovery)".to_string(),
-                "    T1003 - OS Credential Dumping (credential-access)".to_string(),
-                "".to_string(),
-                "  Recommended actions:".to_string(),
-                "    [NOW]   Isolate compromised endpoint".to_string(),
-                "    [NOW]   Revoke session tokens".to_string(),
-                "    [5min]  Block C2 IP range".to_string(),
-                "    [15min] Rotate service accounts".to_string(),
-            ];
+                "  Actions:".to_string(),
+                "  [NOW]   Isolate endpoint".to_string(),
+                "  [NOW]   Revoke tokens".to_string(),
+                "  [5min]  Block C2".to_string(),
+                "  [15min] Rotate accounts".to_string(),
+            ]);
+            history.push(format!("  Velocity: {:.0} min remaining ({:.0}% confidence)", est.minutes_remaining, est.confidence * 100.0));
         }
 
         shadowline::tui::Command::Kill { vendor, dry_run, .. } => {
@@ -1044,33 +993,38 @@ fn execute_tui_command(input: &str, dash: &mut shadowline::tui::Dashboard) {
 
             match ks.build_kill_plan(&demo_vendor) {
                 Ok(plan) => {
-                    let label = if dry_run { "DRY RUN" } else { "KILL CHAIN" };
-                    output.push(format!("  {}: {}", label, vendor));
-                    output.push("".to_string());
-                    output.push(format!("  Vendor: {}", plan.vendor_name));
-                    output.push(format!("  Actions: {}", plan.steps.len()));
-                    output.push(format!("  Est. execution: {:.1}s", plan.estimated_seconds));
-                    output.push("".to_string());
+                    dash.set_status(vec![
+                        format!("  Kill: {}", vendor),
+                        "".to_string(),
+                        format!("  Vendor: {}", plan.vendor_name),
+                        format!("  Actions: {}", plan.steps.len()),
+                        format!("  Est: {:.1}s", plan.estimated_seconds),
+                        "".to_string(),
+                        "  Connections:".to_string(),
+                    ]);
                     for (i, step) in plan.steps.iter().enumerate() {
                         let op = if dry_run { "WOULD REVOKE" } else { "REVOKING" };
-                        output.push(format!(
-                            "  [{}] {} {} ({})",
-                            i + 1,
-                            op,
-                            step.platform.display_name(),
-                            step.connection_id,
-                        ));
+                        dash.set_status(vec![
+                            format!("  Kill: {}", vendor),
+                            "".to_string(),
+                            format!("  Vendor: {}", plan.vendor_name),
+                            format!("  Actions: {}", plan.steps.len()),
+                            format!("  Est: {:.1}s", plan.estimated_seconds),
+                            "".to_string(),
+                            "  Connections:".to_string(),
+                            format!("  [{}] {} {}", i + 1, op, step.platform.display_name()),
+                        ]);
+                        history.push(format!("  [{}] {} {}", i + 1, op, step.platform.display_name()));
                     }
                     if dry_run {
-                        output.push("".to_string());
-                        output.push("  Dry run complete. No actions taken.".to_string());
+                        history.push("  Dry run complete. No actions taken.".to_string());
                     }
                 }
-                Err(e) => output.push(format!("  Error: {}", e)),
+                Err(e) => history.push(format!("  Error: {}", e)),
             }
         }
 
-        shadowline::tui::Command::Graph { vendor } => {
+        shadowline::tui::Command::Graph { vendor: _ } => {
             let mut graph = shadowline::core::IntegrationGraph::new();
             graph.add_vendor(shadowline::core::Vendor {
                 id: "vendor-drift".to_string(),
@@ -1129,31 +1083,19 @@ fn execute_tui_command(input: &str, dash: &mut shadowline::tui::Dashboard) {
                 last_scanned: Some(chrono::Utc::now()),
             });
 
-            output.push("  INTEGRATION GRAPH".to_string());
-            output.push("".to_string());
-            output.push(format!(
-                "  Vendors: {} | Connections: {} | Active: {} | Dormant: {}",
-                graph.list_vendors().len(),
-                graph.total_connections(),
-                graph.active_connections(),
-                graph.dormant_connections(),
-            ));
-            output.push("".to_string());
-
+            let mut lines = vec![
+                format!("  {} vendors | {} connections", graph.list_vendors().len(), graph.total_connections()),
+                "".to_string(),
+            ];
             for v in graph.list_vendors() {
                 let risk_icon = if v.risk_score >= 0.7 { "!" } else { "+" };
-                output.push(format!("  {} {} (risk: {:.0}%)", risk_icon, v.name, v.risk_score * 100.0));
+                lines.push(format!("  {} {} ({:.0}%)", risk_icon, v.name, v.risk_score * 100.0));
                 for conn in &v.connections {
-                    let status_icon = match conn.status {
-                        shadowline::core::ConnectionStatus::Active => "*",
-                        shadowline::core::ConnectionStatus::Dormant => "o",
-                        shadowline::core::ConnectionStatus::Revoked => "x",
-                        shadowline::core::ConnectionStatus::Suspicious => "!",
-                    };
-                    output.push(format!("    {} {}", status_icon, conn.platform.display_name()));
+                    lines.push(format!("    * {}", conn.platform.display_name()));
                 }
-                output.push("".to_string());
             }
+            dash.set_status(lines);
+            history.push(format!("  Graph: {} vendors, {} connections", graph.list_vendors().len(), graph.total_connections()));
         }
 
         shadowline::tui::Command::Blast { vendor } => {
@@ -1187,152 +1129,86 @@ fn execute_tui_command(input: &str, dash: &mut shadowline::tui::Dashboard) {
                 last_scanned: None,
             };
             let radius = calc.calculate(&v);
-            output = vec![
-                format!("  BLAST RADIUS: {}", vendor),
-                "".to_string(),
-                format!("  Systems affected:     {}", radius.systems_affected),
-                format!("  Data records at risk: {}", radius.data_records_at_risk),
-                format!("  Teams affected:       {}", radius.teams_affected.join(", ")),
-            ];
-            if !radius.downstream_vendors.is_empty() {
-                output.push(format!("  Downstream:           {}", radius.downstream_vendors.join(", ")));
-            }
-            output.push("".to_string());
             let risk = if radius.systems_affected > 10 { "CRITICAL" } else if radius.systems_affected > 5 { "HIGH" } else { "MEDIUM" };
-            output.push(format!("  Risk level: {}", risk));
+            dash.set_status(vec![
+                format!("  Blast: {}", vendor),
+                "".to_string(),
+                format!("  Systems: {}", radius.systems_affected),
+                format!("  Records: {}", radius.data_records_at_risk),
+                format!("  Teams: {}", radius.teams_affected.join(", ")),
+                format!("  Risk: {}", risk),
+            ]);
+            history.push(format!("  Blast radius: {} systems, {} records at risk ({})", radius.systems_affected, radius.data_records_at_risk, risk));
         }
 
         shadowline::tui::Command::Scan { path, .. } => {
             match shadowline::scanner::scan_all(std::path::Path::new(&path)) {
                 Ok(result) => {
-                    output.push(format!("  SCAN: {}", path));
-                    output.push("".to_string());
-                    if result.ecosystems_found.is_empty() {
-                        output.push("  No supported ecosystems found.".to_string());
-                        output.push("  Supported: npm (package.json), agent skills".to_string());
-                    } else {
-                        output.push(format!("  Ecosystems: {}", result.ecosystems_found.join(", ")));
-                        output.push("".to_string());
-                        output.push(format!(
-                            "  {} total | {} clean | {} risky | {} malicious",
-                            result.total_packages, result.clean_count, result.risky_count, result.malicious_count,
-                        ));
-                        output.push("".to_string());
-                        for f in &result.findings {
-                            let icon = match f.severity {
-                                shadowline::scanner::Severity::Malicious => "X",
-                                shadowline::scanner::Severity::Risky => "!",
-                                shadowline::scanner::Severity::Info => "i",
-                            };
-                            output.push(format!("  {} {}/{}", icon, f.ecosystem, f.package_name));
-                            output.push(format!("    {}", f.reason));
-                            output.push(format!("    -> {}", f.recommendation));
-                            output.push("".to_string());
-                        }
-                        if result.findings.is_empty() {
-                            output.push("  All packages clean.".to_string());
-                        }
+                    let mut lines = vec![
+                        format!("  Scan: {}", path),
+                        "".to_string(),
+                        format!("  Ecosystems: {}", result.ecosystems_found.join(", ")),
+                        format!("  {} total | {} clean | {} risky | {} malicious",
+                            result.total_packages, result.clean_count, result.risky_count, result.malicious_count),
+                        "".to_string(),
+                    ];
+                    for f in &result.findings {
+                        let icon = match f.severity {
+                            shadowline::scanner::Severity::Malicious => "X",
+                            shadowline::scanner::Severity::Risky => "!",
+                            shadowline::scanner::Severity::Info => "i",
+                        };
+                        lines.push(format!("  {} {}/{}", icon, f.ecosystem, f.package_name));
+                        lines.push(format!("    {}", f.reason));
                     }
+                    if result.findings.is_empty() {
+                        lines.push("  All clean.".to_string());
+                    }
+                    dash.set_scan(lines.clone());
+                    history.push(format!("  Scan: {} clean, {} risky, {} malicious", result.clean_count, result.risky_count, result.malicious_count));
                 }
-                Err(e) => output.push(format!("  Scan error: {}", e)),
+                Err(e) => history.push(format!("  Scan error: {}", e)),
             }
         }
 
-        shadowline::tui::Command::Drill { simulate, history, .. } => {
-            if history {
-                output = vec![
-                    "  DRILL HISTORY".to_string(),
-                    "".to_string(),
-                    "  Date                Vendor     Score  Time    Missed".to_string(),
-                    "  2026-03-28 14:00    Drift      83     4.2s    2".to_string(),
-                    "  2026-03-21 10:00    Slack      91     2.1s    0".to_string(),
-                    "  2026-03-14 15:00    random     76     5.8s    3".to_string(),
-                ];
+        shadowline::tui::Command::Drill { simulate, history: hist, .. } => {
+            if hist {
+                history.push("  Drill history: Drift=83, Slack=91, random=76".to_string());
             } else if simulate {
-                output = vec![
-                    "  SEVERING DRILL".to_string(),
-                    "".to_string(),
-                    "  Simulated compromise: OAuth tokens leaked".to_string(),
-                    "".to_string(),
-                    "  Discovery:           8 integrations found".to_string(),
-                    "  Kill execution:      3.2 seconds".to_string(),
-                    "  Missed integrations: 1 (staging bot)".to_string(),
-                    "".to_string(),
-                    "  Drill score: 87/100".to_string(),
-                    "  Recommendation: Add staging bot to integration graph".to_string(),
-                ];
+                history.push("  Drill: 8 integrations, 3.2s kill, 1 missed (score: 87/100)".to_string());
             } else {
-                output = vec!["  Usage: drill --simulate | drill --history".to_string()];
+                history.push("  Usage: drill --simulate | drill --history".to_string());
             }
         }
 
-        shadowline::tui::Command::Audit { verify, show, last } => {
+        shadowline::tui::Command::Audit { verify, show, .. } => {
             if verify {
-                output = vec![
-                    "  AUDIT LOG VERIFICATION".to_string(),
-                    "".to_string(),
-                    "  Entries: 0".to_string(),
-                    "  Chain integrity: VALID".to_string(),
-                ];
+                history.push("  Audit: chain VALID, 0 entries".to_string());
             } else if show {
-                let count = last.unwrap_or(10);
-                output = vec![
-                    format!("  AUDIT LOG (last {})", count),
-                    "".to_string(),
-                    "  No entries yet.".to_string(),
-                ];
+                history.push("  Audit: no entries yet".to_string());
             } else {
-                output = vec!["  Usage: audit --verify | audit --show".to_string()];
+                history.push("  Usage: audit --verify | audit --show".to_string());
             }
         }
 
         shadowline::tui::Command::Skills { action, name } => {
             match action.as_str() {
-                "list" => {
-                    output = vec![
-                        "  INSTALLED SKILLS".to_string(),
-                        "".to_string(),
-                        "  No skills installed.".to_string(),
-                        "  Skills dir: ~/.shadowline/skills/".to_string(),
-                    ];
-                }
-                "install" => {
-                    output = vec![format!("  Installing {}... (not yet implemented)", name.unwrap_or_default())];
-                }
-                _ => {
-                    output = vec!["  Usage: skills [list|install|remove] [name]".to_string()];
-                }
+                "list" => history.push("  Skills: none installed".to_string()),
+                _ => history.push(format!("  Skills: {} {}", action, name.unwrap_or_default())),
             }
         }
 
         shadowline::tui::Command::Init => {
             match shadowline::data_dir() {
-                Ok(dir) => {
-                    output = vec![
-                        "  SHADOWLINE INIT".to_string(),
-                        "".to_string(),
-                        format!("  Data dir: {}", dir.display()),
-                        "".to_string(),
-                        "  Run 'init' from CLI for full setup.".to_string(),
-                    ];
-                }
-                Err(e) => output = vec![format!("  Error: {}", e)],
+                Ok(dir) => history.push(format!("  Data dir: {}", dir.display())),
+                Err(e) => history.push(format!("  Error: {}", e)),
             }
         }
 
         shadowline::tui::Command::Unknown(cmd) => {
-            output = vec![
-                format!("  Unknown command: '{}'", cmd),
-                "".to_string(),
-                "  Type 'help' for available commands.".to_string(),
-            ];
+            history.push(format!("  Unknown: '{}'. Type 'help'.", cmd));
         }
 
-        _ => {
-            output = vec!["  Command not yet implemented in TUI mode.".to_string()];
-        }
+        _ => {}
     }
-
-    dash.set_output(output);
-    dash.add_log(format!("Executed: {}", input));
 }
