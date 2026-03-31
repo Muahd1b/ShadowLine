@@ -1,5 +1,5 @@
-pub mod dashboard;
 pub mod command;
+pub mod dashboard;
 
-pub use dashboard::Dashboard;
 pub use command::{Command, CommandParser, CommandResult};
+pub use dashboard::{Dashboard, Focus};

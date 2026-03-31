@@ -726,11 +726,12 @@ async fn cmd_init() -> anyhow::Result<()> {
 async fn run_tui() -> anyhow::Result<()> {
     use crossterm::{
         execute,
+        event::{DisableMouseCapture, EnableMouseCapture},
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, Clear, ClearType},
     };
-
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
+    execute!(stdout, EnableMouseCapture)?;
     execute!(stdout, EnterAlternateScreen)?;
     execute!(stdout, Clear(ClearType::All))?;
     let mut terminal = ratatui::init();
@@ -743,6 +744,7 @@ async fn run_tui() -> anyhow::Result<()> {
     let result = run_tui_loop(&mut terminal, dashboard).await;
 
     disable_raw_mode()?;
+    execute!(terminal.backend_mut(), DisableMouseCapture)?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
@@ -753,13 +755,14 @@ async fn run_tui_loop(
     terminal: &mut ratatui::DefaultTerminal,
     mut dash: shadowline::tui::Dashboard,
 ) -> anyhow::Result<()> {
-    use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+    use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseEventKind};
     use ratatui::{
         layout::{Constraint, Direction, Layout, Rect},
         style::{Color, Modifier, Style},
         text::{Line, Span},
         widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wrap},
     };
+    use shadowline::tui::Focus;
     
     let theme = shadowline::theme::Theme::new();
 
@@ -787,17 +790,35 @@ async fn run_tui_loop(
                 ])
                 .split(outer[0]);
 
-            // Status pane - cyan theme with scroll
-            let status_scroll_pos = if dash.status_lines.is_empty() {
-            "0/0".to_string()
-            } else {
-            format!("{}/{}", dash.status_scroll + 1, dash.status_lines.len())
-    };
-    let status_block = Block::default()
-      .borders(Borders::ALL)
-      .border_style(Style::default().fg(Color::Rgb(0, 200, 255))) // Cyan
-      .title(Span::styled(" Status ", Style::default().fg(Color::Rgb(0, 200, 255)).add_modifier(Modifier::BOLD)))
-      .title_bottom(Span::styled(status_scroll_pos, Style::default().fg(Color::Rgb(0, 200, 255))));
+            // Bottom 1/3: terminal (left) + commands (right)
+            let bottom = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(66),
+                    Constraint::Percentage(34),
+                ])
+                .split(outer[1]);
+
+            // Calculate inner heights (viewport = total height minus 2 for borders)
+            let status_viewport = top[0].height.saturating_sub(2) as usize;
+            let velocity_viewport = top[1].height.saturating_sub(2) as usize;
+            let scan_viewport = top[2].height.saturating_sub(2) as usize;
+            let terminal_viewport = bottom[0].height.saturating_sub(2) as usize;
+
+            // Update viewport heights in dashboard
+            dash.update_viewport_heights(status_viewport, velocity_viewport, scan_viewport, terminal_viewport);
+
+            // Status pane - cyan theme with scroll indicator
+            let status_scroll_pos = dash.get_scroll_info(Focus::Status);
+            let status_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(if dash.focus == Focus::Status {
+                    Style::default().fg(Color::Rgb(0, 255, 255)).add_modifier(Modifier::BOLD) // Bright cyan when focused
+                } else {
+                    Style::default().fg(Color::Rgb(0, 200, 255)) // Normal cyan
+                })
+                .title(Span::styled(" Status ", Style::default().fg(Color::Rgb(0, 200, 255)).add_modifier(Modifier::BOLD)))
+                .title_bottom(Span::styled(status_scroll_pos, Style::default().fg(Color::Rgb(0, 200, 255))));
             let status_p = Paragraph::new(
             dash.status_lines.iter().map(|l| Line::from(l.clone())).collect::<Vec<_>>(),
             )
@@ -806,17 +827,17 @@ async fn run_tui_loop(
             .scroll((dash.status_scroll as u16, 0));
         frame.render_widget(status_p, top[0]);
 
-            // Velocity pane - yellow/orange theme with scroll
-            let velocity_scroll_pos = if dash.velocity_lines.is_empty() {
-            "0/0".to_string()
-            } else {
-            format!("{}/{}", dash.velocity_scroll + 1, dash.velocity_lines.len())
-    };
-    let velocity_block = Block::default()
-      .borders(Borders::ALL)
-      .border_style(Style::default().fg(Color::Rgb(255, 170, 0))) // Orange
-      .title(Span::styled(" Velocity ", Style::default().fg(Color::Rgb(255, 170, 0)).add_modifier(Modifier::BOLD)))
-      .title_bottom(Span::styled(velocity_scroll_pos, Style::default().fg(Color::Rgb(255, 170, 0))));
+            // Velocity pane - yellow/orange theme with scroll indicator
+            let velocity_scroll_pos = dash.get_scroll_info(Focus::Velocity);
+            let velocity_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(if dash.focus == Focus::Velocity {
+                    Style::default().fg(Color::Rgb(255, 220, 0)).add_modifier(Modifier::BOLD) // Bright yellow when focused
+                } else {
+                    Style::default().fg(Color::Rgb(255, 170, 0)) // Normal orange
+                })
+                .title(Span::styled(" Velocity ", Style::default().fg(Color::Rgb(255, 170, 0)).add_modifier(Modifier::BOLD)))
+                .title_bottom(Span::styled(velocity_scroll_pos, Style::default().fg(Color::Rgb(255, 170, 0))));
             let vel_p = Paragraph::new(
                 dash.velocity_lines.iter().map(|l| Line::from(l.clone())).collect::<Vec<_>>(),
             )
@@ -825,33 +846,24 @@ async fn run_tui_loop(
         .scroll((dash.velocity_scroll as u16, 0));
             frame.render_widget(vel_p, top[1]);
 
-            // Scan pane - magenta/purple theme with scroll
-            let scan_scroll_pos = if dash.scan_lines.is_empty() {
-            "0/0".to_string()
-            } else {
-            format!("{}/{}", dash.scan_scroll + 1, dash.scan_lines.len())
-    };
-    let scan_block = Block::default()
-      .borders(Borders::ALL)
-      .border_style(Style::default().fg(Color::Rgb(200, 100, 255))) // Purple
-      .title(Span::styled(" Scan ", Style::default().fg(Color::Rgb(200, 100, 255)).add_modifier(Modifier::BOLD)))
-      .title_bottom(Span::styled(scan_scroll_pos, Style::default().fg(Color::Rgb(200, 100, 255))));
+            // Scan pane - magenta/purple theme with scroll indicator
+            let scan_scroll_pos = dash.get_scroll_info(Focus::Scan);
+            let scan_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(if dash.focus == Focus::Scan {
+                    Style::default().fg(Color::Rgb(255, 150, 255)).add_modifier(Modifier::BOLD) // Bright magenta when focused
+                } else {
+                    Style::default().fg(Color::Rgb(200, 100, 255)) // Normal purple
+                })
+                .title(Span::styled(" Scan ", Style::default().fg(Color::Rgb(200, 100, 255)).add_modifier(Modifier::BOLD)))
+                .title_bottom(Span::styled(scan_scroll_pos, Style::default().fg(Color::Rgb(200, 100, 255))));
             let scan_p = Paragraph::new(
                 dash.scan_lines.iter().map(|l| Line::from(l.clone())).collect::<Vec<_>>(),
             )
             .block(scan_block)
         .wrap(Wrap { trim: false })
         .scroll((dash.scan_scroll as u16, 0));
-        frame.render_widget(scan_p, top[2]);
-
-            // Bottom 1/3: terminal (left) + commands (right)
-            let bottom = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-            Constraint::Percentage(66),
-            Constraint::Percentage(34),
-            ])
-            .split(outer[1]);
+            frame.render_widget(scan_p, top[2]);
 
             // Terminal area: show last N history lines + input at bottom (fixed, no scroll)
             let term_height = bottom[0].height.saturating_sub(2) as usize; // Account for borders
@@ -877,10 +889,14 @@ async fn run_tui_loop(
             Span::styled("▋", Style::default().fg(Color::Green)),
         ]));
 
-        let term_block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Rgb(0, 255, 135))) // Bright green
-            .title(Span::styled(" Terminal ", Style::default().fg(Color::Rgb(0, 255, 135)).add_modifier(Modifier::BOLD)));
+            let term_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(if dash.focus == Focus::Terminal {
+                    Style::default().fg(Color::Rgb(150, 255, 150)).add_modifier(Modifier::BOLD) // Bright bright green when focused
+                } else {
+                    Style::default().fg(Color::Rgb(0, 255, 135)) // Normal green
+                })
+                .title(Span::styled(" Terminal ", Style::default().fg(Color::Rgb(0, 255, 135)).add_modifier(Modifier::BOLD)));
         
         frame.render_widget(
             Paragraph::new(terminal_content)
@@ -915,58 +931,65 @@ async fn run_tui_loop(
         })?;
 
         if event::poll(std::time::Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') if dash.command_input.is_empty() => return Ok(()),
-                        KeyCode::Enter => {
-                            let input = dash.command_input.clone();
-                            dash.command_input.clear();
-                            if !input.is_empty() {
-                                term_history.push(format!("$ {}", input));
-                                execute_tui_command(&input, &mut dash, &mut term_history);
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind == KeyEventKind::Press {
+                        match key.code {
+                            KeyCode::Char('q') if dash.command_input.is_empty() => return Ok(()),
+                            KeyCode::Enter => {
+                                let input = dash.command_input.clone();
+                                dash.command_input.clear();
+                                if !input.is_empty() {
+                                    term_history.push(format!("$ {}", input));
+                                    execute_tui_command(&input, &mut dash, &mut term_history);
+                                }
                             }
+                            KeyCode::Backspace => {
+                                dash.command_input.pop();
+                            }
+                            KeyCode::Char(c) => {
+                                dash.command_input.push(c);
+                            }
+                            KeyCode::Tab => {
+                                dash.next_pane();
+                            }
+                            KeyCode::BackTab => {
+                                dash.prev_pane();
+                            }
+                            KeyCode::Up => {
+                                dash.scroll_focused_up(1);
+                            }
+                            KeyCode::Down => {
+                                dash.scroll_focused_down(1);
+                            }
+                            KeyCode::PageUp => {
+                                dash.scroll_focused_up(5);
+                            }
+                            KeyCode::PageDown => {
+                                dash.scroll_focused_down(5);
+                            }
+                            KeyCode::Home => {
+                                dash.scroll_all_to_top();
+                            }
+                            KeyCode::End => {
+                                dash.scroll_focused_to_bottom();
+                            }
+                            _ => {}
                         }
-                        KeyCode::Backspace => {
-                            dash.command_input.pop();
-                        }
-                        KeyCode::Char(c) => {
-                        dash.command_input.push(c);
-                        }
-                        KeyCode::Up => {
-                        dash.scroll_status_up();
-                        dash.scroll_velocity_up();
-                        dash.scroll_scan_up();
-                    }
-                    KeyCode::Down => {
-                        dash.scroll_status_down();
-                        dash.scroll_velocity_down();
-                        dash.scroll_scan_down();
-                    }
-                    KeyCode::PageUp => {
-                        // Scroll all panes up by 5 lines
-                        for _ in 0..5 {
-                            dash.scroll_status_up();
-                            dash.scroll_velocity_up();
-                            dash.scroll_scan_up();
-                        }
-                    }
-                    KeyCode::PageDown => {
-                        // Scroll all panes down by 5 lines
-                        for _ in 0..5 {
-                            dash.scroll_status_down();
-                            dash.scroll_velocity_down();
-                            dash.scroll_scan_down();
-                        }
-                    }
-                    KeyCode::Home => {
-                        dash.status_scroll = 0;
-                        dash.velocity_scroll = 0;
-                        dash.scan_scroll = 0;
-                    }
-                    _ => {}
                     }
                 }
+                Event::Mouse(mouse) => {
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => {
+                            dash.scroll_focused_up(3);
+                        }
+                        MouseEventKind::ScrollDown => {
+                            dash.scroll_focused_down(3);
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
             }
         }
     }
