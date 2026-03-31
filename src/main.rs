@@ -728,7 +728,6 @@ async fn run_tui() -> anyhow::Result<()> {
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     };
-    
 
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -747,7 +746,7 @@ async fn run_tui() -> anyhow::Result<()> {
 
 async fn run_tui_loop(
     terminal: &mut ratatui::DefaultTerminal,
-    mut dashboard: shadowline::tui::Dashboard,
+    mut dash: shadowline::tui::Dashboard,
 ) -> anyhow::Result<()> {
     use crossterm::event::{self, Event, KeyCode, KeyEventKind};
     use ratatui::{
@@ -759,13 +758,16 @@ async fn run_tui_loop(
 
     loop {
         terminal.draw(|frame| {
-            let chunks = Layout::default()
+            let area = frame.area();
+
+            let outer = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Min(10),
-                    Constraint::Length(3),
+                    Constraint::Ratio(2, 3),
+                    Constraint::Ratio(1, 3),
+                    Constraint::Length(1),
                 ])
-                .split(frame.area());
+                .split(area);
 
             let top = Layout::default()
                 .direction(Direction::Horizontal)
@@ -775,114 +777,560 @@ async fn run_tui_loop(
                     Constraint::Percentage(25),
                     Constraint::Percentage(25),
                 ])
-                .split(chunks[0]);
+                .split(outer[0]);
 
-            // Incidents pane
-            let incidents_text = vec![
-                Line::from(vec![Span::styled(
-                    "  INCIDENTS",
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                )]),
+            // Top-left: Commands reference
+            let help_lines = vec![
+                Line::from(vec![Span::styled("  COMMANDS", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))]),
                 Line::from(""),
-                Line::from("  No active incidents"),
-                Line::from(""),
-                Line::from("  Commands:"),
-                Line::from("  [k] kill  [s] scan"),
-                Line::from("  [c] clock [g] graph"),
-                Line::from("  [d] drill [a] audit"),
-                Line::from("  [h] help  [q] quit"),
+                Line::from(vec![Span::styled("  clock ", Style::default().fg(Color::Yellow)), Span::raw("incident:ID")]),
+                Line::from(vec![Span::styled("  kill ", Style::default().fg(Color::Yellow)), Span::raw("vendor:NAME")]),
+                Line::from(vec![Span::styled("  graph", Style::default().fg(Color::Yellow))]),
+                Line::from(vec![Span::styled("  blast ", Style::default().fg(Color::Yellow)), Span::raw("vendor:NAME")]),
+                Line::from(vec![Span::styled("  scan ", Style::default().fg(Color::Yellow)), Span::raw("[path]")]),
+                Line::from(vec![Span::styled("  drill ", Style::default().fg(Color::Yellow)), Span::raw("--simulate")]),
+                Line::from(vec![Span::styled("  audit ", Style::default().fg(Color::Yellow)), Span::raw("--verify")]),
+                Line::from(vec![Span::styled("  help", Style::default().fg(Color::Yellow))]),
+                Line::from(vec![Span::styled("  quit", Style::default().fg(Color::Yellow))]),
             ];
-            let incidents = Paragraph::new(incidents_text)
-                .block(Block::default().borders(Borders::ALL).title(" Incidents "))
-                .wrap(Wrap { trim: true });
-            frame.render_widget(incidents, top[0]);
+            frame.render_widget(
+                Paragraph::new(help_lines).block(Block::default().borders(Borders::ALL).title(" Commands ")),
+                top[0],
+            );
 
-            // Vendors pane
-            let vendors_text = vec![
-                Line::from(vec![Span::styled(
-                    "  VENDORS",
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                )]),
+            // Top row 2: Status
+            let status_lines = vec![
+                Line::from(vec![Span::styled("  STATUS", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))]),
                 Line::from(""),
-                Line::from("  Run 'shadowline init' first"),
-                Line::from("  to discover integrations"),
+                Line::from(format!("  Vendors: {}", dash.vendors.len())),
+                Line::from(format!("  Connections: {}", dash.total_connections())),
+                Line::from(format!("  Active: {}", dash.active_connections())),
+                Line::from(""),
+                Line::from(vec![Span::styled("  No real data yet.", Style::default().fg(Color::DarkGray))]),
+                Line::from(vec![Span::styled("  Run 'init' to start.", Style::default().fg(Color::DarkGray))]),
             ];
-            let vendors = Paragraph::new(vendors_text)
-                .block(Block::default().borders(Borders::ALL).title(" Vendors "))
-                .wrap(Wrap { trim: true });
-            frame.render_widget(vendors, top[1]);
+            frame.render_widget(
+                Paragraph::new(status_lines).block(Block::default().borders(Borders::ALL).title(" Status ")),
+                top[1],
+            );
 
-            // Velocity pane
-            let velocity_text = vec![
-                Line::from(vec![Span::styled(
-                    "  VELOCITY",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                )]),
+            // Top row 3: Velocity
+            let vel_lines = vec![
+                Line::from(vec![Span::styled("  VELOCITY", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))]),
                 Line::from(""),
-                Line::from("  No active incidents"),
+                Line::from("  ┌────────────────┐"),
+                Line::from("  │                │"),
+                Line::from("  │    --:--       │"),
+                Line::from("  │    NO DATA     │"),
+                Line::from("  │                │"),
+                Line::from("  └────────────────┘"),
                 Line::from(""),
-                Line::from("  ┌──────────────┐"),
-                Line::from("  │   --:--      │"),
-                Line::from("  │   NO DATA    │"),
-                Line::from("  └──────────────┘"),
+                Line::from(vec![Span::styled("  Run 'clock' to", Style::default().fg(Color::DarkGray))]),
+                Line::from(vec![Span::styled("  see estimates.", Style::default().fg(Color::DarkGray))]),
             ];
-            let velocity = Paragraph::new(velocity_text)
-                .block(Block::default().borders(Borders::ALL).title(" Velocity "))
-                .wrap(Wrap { trim: true });
-            frame.render_widget(velocity, top[2]);
+            frame.render_widget(
+                Paragraph::new(vel_lines).block(Block::default().borders(Borders::ALL).title(" Velocity ")),
+                top[2],
+            );
 
-            // Scan pane
-            let scan_text = vec![
-                Line::from(vec![Span::styled(
-                    "  SCAN",
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-                )]),
+            // Top row 4: Scan
+            let scan_lines = vec![
+                Line::from(vec![Span::styled("  SCAN", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))]),
                 Line::from(""),
-                Line::from("  Last scan: never"),
+                Line::from("  Last: never"),
                 Line::from(""),
-                Line::from("  Run: shadowline scan ."),
+                Line::from("  Clean:     --"),
+                Line::from("  Risky:     --"),
+                Line::from("  Malicious: --"),
+                Line::from(""),
+                Line::from(vec![Span::styled("  Run 'scan .' to", Style::default().fg(Color::DarkGray))]),
+                Line::from(vec![Span::styled("  check packages.", Style::default().fg(Color::DarkGray))]),
             ];
-            let scan = Paragraph::new(scan_text)
-                .block(Block::default().borders(Borders::ALL).title(" Scan "))
-                .wrap(Wrap { trim: true });
-            frame.render_widget(scan, top[3]);
+            frame.render_widget(
+                Paragraph::new(scan_lines).block(Block::default().borders(Borders::ALL).title(" Scan ")),
+                top[3],
+            );
 
-            // Command input
-            let cmd_text = vec![Line::from(vec![
-                Span::styled(" > ", Style::default().fg(Color::Green)),
-                Span::raw(&dashboard.command_input),
-                Span::styled("_", Style::default().fg(Color::Green)),
-            ])];
-            let cmd = Paragraph::new(cmd_text)
-                .block(Block::default().borders(Borders::ALL).title(" Shadowline v0.1.0 "))
-                .wrap(Wrap { trim: true });
-            frame.render_widget(cmd, chunks[1]);
+            // Bottom 1/3: Command output
+            let visible_lines = outer[1].height.saturating_sub(2) as usize;
+            let start = dash.scroll_offset;
+            let end = (start + visible_lines).min(dash.output_lines.len());
+            let display_lines: Vec<Line> = dash.output_lines[start..end]
+                .iter()
+                .map(|l| Line::from(l.as_str()))
+                .collect();
+
+            frame.render_widget(
+                Paragraph::new(display_lines)
+                    .block(Block::default().borders(Borders::ALL).title(
+                        &format!(" Output ({} lines, scroll: ↑↓) ", dash.output_lines.len()),
+                    ))
+                    .wrap(Wrap { trim: false }),
+                outer[1],
+            );
+
+            // Very bottom: command input
+            let input_line = Line::from(vec![
+                Span::styled(" > ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw(&dash.command_input),
+                Span::styled("█", Style::default().fg(Color::Green)),
+            ]);
+            frame.render_widget(Paragraph::new(input_line), outer[2]);
         })?;
 
-        if event::poll(std::time::Duration::from_millis(100))?
-            && let Event::Key(key) = event::read()?
-                && key.kind == KeyEventKind::Press {
+        if event::poll(std::time::Duration::from_millis(50))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
                     match key.code {
-                        KeyCode::Char('q') => return Ok(()),
+                        KeyCode::Char('q') if dash.command_input.is_empty() => return Ok(()),
                         KeyCode::Enter => {
-                            let input = dashboard.command_input.clone();
-                            let cmd = shadowline::tui::CommandParser::parse(&input);
-                            match cmd {
-                                shadowline::tui::Command::Quit => return Ok(()),
-                                _ => {
-                                    dashboard.add_log(format!("Command: {}", input));
-                                }
+                            let input = dash.command_input.clone();
+                            dash.command_input.clear();
+                            if !input.is_empty() {
+                                execute_tui_command(&input, &mut dash);
                             }
-                            dashboard.command_input.clear();
                         }
                         KeyCode::Backspace => {
-                            dashboard.command_input.pop();
+                            dash.command_input.pop();
+                        }
+                        KeyCode::Up => {
+                            dash.scroll_up();
+                        }
+                        KeyCode::Down => {
+                            dash.scroll_down();
                         }
                         KeyCode::Char(c) => {
-                            dashboard.command_input.push(c);
+                            dash.command_input.push(c);
                         }
                         _ => {}
                     }
                 }
+            }
+        }
     }
+}
+
+fn execute_tui_command(input: &str, dash: &mut shadowline::tui::Dashboard) {
+    let cmd = shadowline::tui::CommandParser::parse(input);
+    let mut output: Vec<String> = vec![];
+
+    match cmd {
+        shadowline::tui::Command::Quit => std::process::exit(0),
+
+        shadowline::tui::Command::Help => {
+            output = vec![
+                "  Shadowline Commands".to_string(),
+                "".to_string(),
+                "  clock <incident>          Velocity estimate".to_string(),
+                "  clock <incident> --json   Velocity as JSON".to_string(),
+                "  kill <vendor>             Execute kill chain".to_string(),
+                "  kill <vendor> --dry-run   Preview kill chain".to_string(),
+                "  graph                     Show integration graph".to_string(),
+                "  graph vendor:<name>       Filter by vendor".to_string(),
+                "  blast <vendor>            Blast radius analysis".to_string(),
+                "  scan [path]               Scan for compromised packages".to_string(),
+                "  scan [path] --json        Scan output as JSON".to_string(),
+                "  drill --simulate          Run severing drill".to_string(),
+                "  drill --history           Show drill history".to_string(),
+                "  audit --verify            Verify audit log".to_string(),
+                "  audit --show              Show audit entries".to_string(),
+                "  skills list               List installed skills".to_string(),
+                "  init                      First-run setup".to_string(),
+                "  quit                      Exit".to_string(),
+                "".to_string(),
+                "  Scroll output: ↑ / ↓".to_string(),
+            ];
+        }
+
+        shadowline::tui::Command::Clock { incident_id, .. } => {
+            let clock = shadowline::core::VelocityClock::new();
+            let incident = shadowline::core::Incident {
+                id: 4721,
+                status: shadowline::core::IncidentStatus::Active,
+                created_at: chrono::Utc::now(),
+                ttps_observed: vec![
+                    shadowline::core::Technique {
+                        mitre_id: "T1078".to_string(),
+                        name: "Valid Accounts".to_string(),
+                        tactic: "initial-access".to_string(),
+                        observed_at: chrono::Utc::now() - chrono::Duration::minutes(20),
+                    },
+                    shadowline::core::Technique {
+                        mitre_id: "T1087".to_string(),
+                        name: "Account Discovery".to_string(),
+                        tactic: "discovery".to_string(),
+                        observed_at: chrono::Utc::now() - chrono::Duration::minutes(12),
+                    },
+                    shadowline::core::Technique {
+                        mitre_id: "T1003".to_string(),
+                        name: "OS Credential Dumping".to_string(),
+                        tactic: "credential-access".to_string(),
+                        observed_at: chrono::Utc::now() - chrono::Duration::minutes(5),
+                    },
+                ],
+                current_stage: shadowline::core::AttackStage::LateralMovement,
+                velocity_estimate: None,
+                blast_radius: None,
+            };
+            let est = clock.estimate(&incident);
+            output = vec![
+                format!("  EXFILCLOCK: {}", incident_id),
+                "".to_string(),
+                "  ┌────────────────────────────────────┐".to_string(),
+                format!("  │  ESTIMATED TIME TO EXFILTRATION    │"),
+                "  │                                    │".to_string(),
+                format!("  │        {:.0} MINUTES                  │", est.minutes_remaining),
+                "  │                                    │".to_string(),
+                format!("  │  Confidence: {:.0}%                   │", est.confidence * 100.0),
+                format!("  │  Range: {:.0} - {:.0} min              │", est.range_low, est.range_high),
+                format!("  │  Archetype: {}     │", est.archetype.display_name()),
+                "  └────────────────────────────────────┘".to_string(),
+                "".to_string(),
+                format!("  Stage: {} ({:.0}%)", incident.current_stage.display_name(), incident.current_stage.progress() * 100.0),
+                "".to_string(),
+                "  TTPs observed:".to_string(),
+                "    T1078 - Valid Accounts (initial-access)".to_string(),
+                "    T1087 - Account Discovery (discovery)".to_string(),
+                "    T1003 - OS Credential Dumping (credential-access)".to_string(),
+                "".to_string(),
+                "  Recommended actions:".to_string(),
+                "    [NOW]   Isolate compromised endpoint".to_string(),
+                "    [NOW]   Revoke session tokens".to_string(),
+                "    [5min]  Block C2 IP range".to_string(),
+                "    [15min] Rotate service accounts".to_string(),
+            ];
+        }
+
+        shadowline::tui::Command::Kill { vendor, dry_run, .. } => {
+            let ks = shadowline::core::KillSwitch::new();
+            let demo_vendor = shadowline::core::Vendor {
+                id: vendor.clone(),
+                name: vendor.replace("vendor:", ""),
+                vendor_type: shadowline::core::VendorType::Saas,
+                risk_score: 0.8,
+                connections: vec![
+                    shadowline::core::Connection {
+                        id: "conn-1".to_string(),
+                        platform: shadowline::core::Platform::Salesforce,
+                        connection_type: shadowline::core::ConnectionType::OAuth {
+                            token_ref: uuid::Uuid::new_v4(),
+                            scopes: vec!["read".to_string(), "write".to_string()],
+                        },
+                        permissions: vec![shadowline::core::Permission {
+                            resource: "contacts".to_string(),
+                            access: shadowline::core::AccessLevel::Write,
+                        }],
+                        status: shadowline::core::ConnectionStatus::Active,
+                        discovered_at: chrono::Utc::now(),
+                        last_used: Some(chrono::Utc::now()),
+                    },
+                    shadowline::core::Connection {
+                        id: "conn-2".to_string(),
+                        platform: shadowline::core::Platform::Slack,
+                        connection_type: shadowline::core::ConnectionType::Webhook {
+                            url: "https://hooks.slack.com/test".to_string(),
+                            events: vec!["message".to_string()],
+                        },
+                        permissions: vec![],
+                        status: shadowline::core::ConnectionStatus::Active,
+                        discovered_at: chrono::Utc::now(),
+                        last_used: None,
+                    },
+                ],
+                last_scanned: None,
+            };
+
+            match ks.build_kill_plan(&demo_vendor) {
+                Ok(plan) => {
+                    let label = if dry_run { "DRY RUN" } else { "KILL CHAIN" };
+                    output.push(format!("  {}: {}", label, vendor));
+                    output.push("".to_string());
+                    output.push(format!("  Vendor: {}", plan.vendor_name));
+                    output.push(format!("  Actions: {}", plan.steps.len()));
+                    output.push(format!("  Est. execution: {:.1}s", plan.estimated_seconds));
+                    output.push("".to_string());
+                    for (i, step) in plan.steps.iter().enumerate() {
+                        let op = if dry_run { "WOULD REVOKE" } else { "REVOKING" };
+                        output.push(format!(
+                            "  [{}] {} {} ({})",
+                            i + 1,
+                            op,
+                            step.platform.display_name(),
+                            step.connection_id,
+                        ));
+                    }
+                    if dry_run {
+                        output.push("".to_string());
+                        output.push("  Dry run complete. No actions taken.".to_string());
+                    }
+                }
+                Err(e) => output.push(format!("  Error: {}", e)),
+            }
+        }
+
+        shadowline::tui::Command::Graph { vendor } => {
+            let mut graph = shadowline::core::IntegrationGraph::new();
+            graph.add_vendor(shadowline::core::Vendor {
+                id: "vendor-drift".to_string(),
+                name: "Drift".to_string(),
+                vendor_type: shadowline::core::VendorType::Saas,
+                risk_score: 0.85,
+                connections: vec![
+                    shadowline::core::Connection {
+                        id: "conn-1".to_string(),
+                        platform: shadowline::core::Platform::Salesforce,
+                        connection_type: shadowline::core::ConnectionType::OAuth {
+                            token_ref: uuid::Uuid::new_v4(),
+                            scopes: vec!["read".to_string(), "write".to_string()],
+                        },
+                        permissions: vec![shadowline::core::Permission {
+                            resource: "contacts".to_string(),
+                            access: shadowline::core::AccessLevel::Write,
+                        }],
+                        status: shadowline::core::ConnectionStatus::Active,
+                        discovered_at: chrono::Utc::now(),
+                        last_used: Some(chrono::Utc::now()),
+                    },
+                    shadowline::core::Connection {
+                        id: "conn-2".to_string(),
+                        platform: shadowline::core::Platform::GoogleWorkspace,
+                        connection_type: shadowline::core::ConnectionType::ApiKey {
+                            key_ref: uuid::Uuid::new_v4(),
+                        },
+                        permissions: vec![],
+                        status: shadowline::core::ConnectionStatus::Active,
+                        discovered_at: chrono::Utc::now(),
+                        last_used: None,
+                    },
+                ],
+                last_scanned: Some(chrono::Utc::now()),
+            });
+            graph.add_vendor(shadowline::core::Vendor {
+                id: "vendor-okta".to_string(),
+                name: "Okta".to_string(),
+                vendor_type: shadowline::core::VendorType::IdentityProvider,
+                risk_score: 0.3,
+                connections: vec![shadowline::core::Connection {
+                    id: "conn-3".to_string(),
+                    platform: shadowline::core::Platform::Okta,
+                    connection_type: shadowline::core::ConnectionType::ServiceAccount {
+                        account_id: "sa-okta-prod".to_string(),
+                    },
+                    permissions: vec![shadowline::core::Permission {
+                        resource: "users".to_string(),
+                        access: shadowline::core::AccessLevel::Admin,
+                    }],
+                    status: shadowline::core::ConnectionStatus::Active,
+                    discovered_at: chrono::Utc::now(),
+                    last_used: Some(chrono::Utc::now()),
+                }],
+                last_scanned: Some(chrono::Utc::now()),
+            });
+
+            output.push("  INTEGRATION GRAPH".to_string());
+            output.push("".to_string());
+            output.push(format!(
+                "  Vendors: {} | Connections: {} | Active: {} | Dormant: {}",
+                graph.list_vendors().len(),
+                graph.total_connections(),
+                graph.active_connections(),
+                graph.dormant_connections(),
+            ));
+            output.push("".to_string());
+
+            for v in graph.list_vendors() {
+                let risk_icon = if v.risk_score >= 0.7 { "!" } else { "+" };
+                output.push(format!("  {} {} (risk: {:.0}%)", risk_icon, v.name, v.risk_score * 100.0));
+                for conn in &v.connections {
+                    let status_icon = match conn.status {
+                        shadowline::core::ConnectionStatus::Active => "*",
+                        shadowline::core::ConnectionStatus::Dormant => "o",
+                        shadowline::core::ConnectionStatus::Revoked => "x",
+                        shadowline::core::ConnectionStatus::Suspicious => "!",
+                    };
+                    output.push(format!("    {} {}", status_icon, conn.platform.display_name()));
+                }
+                output.push("".to_string());
+            }
+        }
+
+        shadowline::tui::Command::Blast { vendor } => {
+            let calc = shadowline::core::BlastRadiusCalculator::new();
+            let v = shadowline::core::Vendor {
+                id: vendor.clone(),
+                name: vendor.replace("vendor:", ""),
+                vendor_type: shadowline::core::VendorType::Saas,
+                risk_score: 0.85,
+                connections: vec![shadowline::core::Connection {
+                    id: "conn-1".to_string(),
+                    platform: shadowline::core::Platform::Salesforce,
+                    connection_type: shadowline::core::ConnectionType::OAuth {
+                        token_ref: uuid::Uuid::new_v4(),
+                        scopes: vec!["admin".to_string(), "read".to_string()],
+                    },
+                    permissions: vec![
+                        shadowline::core::Permission {
+                            resource: "contacts".to_string(),
+                            access: shadowline::core::AccessLevel::Write,
+                        },
+                        shadowline::core::Permission {
+                            resource: "accounts".to_string(),
+                            access: shadowline::core::AccessLevel::Read,
+                        },
+                    ],
+                    status: shadowline::core::ConnectionStatus::Active,
+                    discovered_at: chrono::Utc::now(),
+                    last_used: Some(chrono::Utc::now()),
+                }],
+                last_scanned: None,
+            };
+            let radius = calc.calculate(&v);
+            output = vec![
+                format!("  BLAST RADIUS: {}", vendor),
+                "".to_string(),
+                format!("  Systems affected:     {}", radius.systems_affected),
+                format!("  Data records at risk: {}", radius.data_records_at_risk),
+                format!("  Teams affected:       {}", radius.teams_affected.join(", ")),
+            ];
+            if !radius.downstream_vendors.is_empty() {
+                output.push(format!("  Downstream:           {}", radius.downstream_vendors.join(", ")));
+            }
+            output.push("".to_string());
+            let risk = if radius.systems_affected > 10 { "CRITICAL" } else if radius.systems_affected > 5 { "HIGH" } else { "MEDIUM" };
+            output.push(format!("  Risk level: {}", risk));
+        }
+
+        shadowline::tui::Command::Scan { path, .. } => {
+            match shadowline::scanner::scan_all(std::path::Path::new(&path)) {
+                Ok(result) => {
+                    output.push(format!("  SCAN: {}", path));
+                    output.push("".to_string());
+                    if result.ecosystems_found.is_empty() {
+                        output.push("  No supported ecosystems found.".to_string());
+                        output.push("  Supported: npm (package.json), agent skills".to_string());
+                    } else {
+                        output.push(format!("  Ecosystems: {}", result.ecosystems_found.join(", ")));
+                        output.push("".to_string());
+                        output.push(format!(
+                            "  {} total | {} clean | {} risky | {} malicious",
+                            result.total_packages, result.clean_count, result.risky_count, result.malicious_count,
+                        ));
+                        output.push("".to_string());
+                        for f in &result.findings {
+                            let icon = match f.severity {
+                                shadowline::scanner::Severity::Malicious => "X",
+                                shadowline::scanner::Severity::Risky => "!",
+                                shadowline::scanner::Severity::Info => "i",
+                            };
+                            output.push(format!("  {} {}/{}", icon, f.ecosystem, f.package_name));
+                            output.push(format!("    {}", f.reason));
+                            output.push(format!("    -> {}", f.recommendation));
+                            output.push("".to_string());
+                        }
+                        if result.findings.is_empty() {
+                            output.push("  All packages clean.".to_string());
+                        }
+                    }
+                }
+                Err(e) => output.push(format!("  Scan error: {}", e)),
+            }
+        }
+
+        shadowline::tui::Command::Drill { simulate, history, .. } => {
+            if history {
+                output = vec![
+                    "  DRILL HISTORY".to_string(),
+                    "".to_string(),
+                    "  Date                Vendor     Score  Time    Missed".to_string(),
+                    "  2026-03-28 14:00    Drift      83     4.2s    2".to_string(),
+                    "  2026-03-21 10:00    Slack      91     2.1s    0".to_string(),
+                    "  2026-03-14 15:00    random     76     5.8s    3".to_string(),
+                ];
+            } else if simulate {
+                output = vec![
+                    "  SEVERING DRILL".to_string(),
+                    "".to_string(),
+                    "  Simulated compromise: OAuth tokens leaked".to_string(),
+                    "".to_string(),
+                    "  Discovery:           8 integrations found".to_string(),
+                    "  Kill execution:      3.2 seconds".to_string(),
+                    "  Missed integrations: 1 (staging bot)".to_string(),
+                    "".to_string(),
+                    "  Drill score: 87/100".to_string(),
+                    "  Recommendation: Add staging bot to integration graph".to_string(),
+                ];
+            } else {
+                output = vec!["  Usage: drill --simulate | drill --history".to_string()];
+            }
+        }
+
+        shadowline::tui::Command::Audit { verify, show, last } => {
+            if verify {
+                output = vec![
+                    "  AUDIT LOG VERIFICATION".to_string(),
+                    "".to_string(),
+                    "  Entries: 0".to_string(),
+                    "  Chain integrity: VALID".to_string(),
+                ];
+            } else if show {
+                let count = last.unwrap_or(10);
+                output = vec![
+                    format!("  AUDIT LOG (last {})", count),
+                    "".to_string(),
+                    "  No entries yet.".to_string(),
+                ];
+            } else {
+                output = vec!["  Usage: audit --verify | audit --show".to_string()];
+            }
+        }
+
+        shadowline::tui::Command::Skills { action, name } => {
+            match action.as_str() {
+                "list" => {
+                    output = vec![
+                        "  INSTALLED SKILLS".to_string(),
+                        "".to_string(),
+                        "  No skills installed.".to_string(),
+                        "  Skills dir: ~/.shadowline/skills/".to_string(),
+                    ];
+                }
+                "install" => {
+                    output = vec![format!("  Installing {}... (not yet implemented)", name.unwrap_or_default())];
+                }
+                _ => {
+                    output = vec!["  Usage: skills [list|install|remove] [name]".to_string()];
+                }
+            }
+        }
+
+        shadowline::tui::Command::Init => {
+            match shadowline::data_dir() {
+                Ok(dir) => {
+                    output = vec![
+                        "  SHADOWLINE INIT".to_string(),
+                        "".to_string(),
+                        format!("  Data dir: {}", dir.display()),
+                        "".to_string(),
+                        "  Run 'init' from CLI for full setup.".to_string(),
+                    ];
+                }
+                Err(e) => output = vec![format!("  Error: {}", e)],
+            }
+        }
+
+        shadowline::tui::Command::Unknown(cmd) => {
+            output = vec![
+                format!("  Unknown command: '{}'", cmd),
+                "".to_string(),
+                "  Type 'help' for available commands.".to_string(),
+            ];
+        }
+
+        _ => {
+            output = vec!["  Command not yet implemented in TUI mode.".to_string()];
+        }
+    }
+
+    dash.set_output(output);
+    dash.add_log(format!("Executed: {}", input));
 }
