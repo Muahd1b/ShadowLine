@@ -726,13 +726,15 @@ async fn cmd_init() -> anyhow::Result<()> {
 async fn run_tui() -> anyhow::Result<()> {
     use crossterm::{
         execute,
-        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, Clear, ClearType},
     };
 
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, Clear(ClearType::All))?;
     let mut terminal = ratatui::init();
+    terminal.clear()?;
 
     let dashboard = shadowline::tui::Dashboard::new();
     let result = run_tui_loop(&mut terminal, dashboard).await;
@@ -763,8 +765,8 @@ async fn run_tui_loop(
             let outer = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Ratio(2, 3),
-                    Constraint::Ratio(1, 3),
+                    Constraint::Percentage(65),
+                    Constraint::Percentage(33),
                     Constraint::Length(1),
                 ])
                 .split(area);
