@@ -1,0 +1,32 @@
+/target
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Profiling
+*.profraw
+*.profdata
+
+# Debug
+debug/
+
+# Build artifacts
+*.d
+*.o
+*.a
+*.so
+*.dylib
+*.pdb
+*.exe
+
+# SQLite runtime files
+*.db-wal
+*.db-shm
