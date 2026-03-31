@@ -6,6 +6,7 @@ pub mod scanner;
 pub mod ai;
 pub mod plugins;
 pub mod tui;
+pub mod splash;
 
 pub use core::{Incident, Vendor, Connection, VelocityEstimate, BlastRadius};
 pub use data::Database;

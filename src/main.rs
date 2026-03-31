@@ -736,6 +736,9 @@ async fn run_tui() -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
     terminal.clear()?;
 
+    // Show splash screen
+    shadowline::splash::show_splash_screen(&mut terminal).await?;
+
     let dashboard = shadowline::tui::Dashboard::new();
     let result = run_tui_loop(&mut terminal, dashboard).await;
 
@@ -782,62 +785,89 @@ async fn run_tui_loop(
                 ])
                 .split(outer[0]);
 
-            // Status pane
+            // Status pane - cyan theme with scroll
+            let status_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Rgb(0, 200, 255))) // Cyan
+            .title(Span::styled(" Status ", Style::default().fg(Color::Rgb(0, 200, 255)).add_modifier(Modifier::BOLD)));
             let status_p = Paragraph::new(
-                dash.status_lines.iter().map(|l| Line::from(l.clone())).collect::<Vec<_>>(),
+            dash.status_lines.iter().map(|l| Line::from(l.clone())).collect::<Vec<_>>(),
             )
-            .block(Block::default().borders(Borders::ALL).title(" Status "))
-            .wrap(Wrap { trim: false });
-            frame.render_widget(status_p, top[0]);
+            .block(status_block)
+            .wrap(Wrap { trim: false })
+            .scroll((dash.status_scroll as u16, 0));
+        frame.render_widget(status_p, top[0]);
 
-            // Velocity pane
+            // Velocity pane - yellow/orange theme with scroll
+            let velocity_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Rgb(255, 170, 0))) // Orange
+                .title(Span::styled(" Velocity ", Style::default().fg(Color::Rgb(255, 170, 0)).add_modifier(Modifier::BOLD)));
             let vel_p = Paragraph::new(
                 dash.velocity_lines.iter().map(|l| Line::from(l.clone())).collect::<Vec<_>>(),
             )
-            .block(Block::default().borders(Borders::ALL).title(" Velocity "))
-            .wrap(Wrap { trim: false });
+            .block(velocity_block)
+            .wrap(Wrap { trim: false })
+        .scroll((dash.velocity_scroll as u16, 0));
             frame.render_widget(vel_p, top[1]);
 
-            // Scan pane
+            // Scan pane - magenta/purple theme with scroll
+            let scan_block = Block::default()
+            .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Rgb(200, 100, 255))) // Purple
+            .title(Span::styled(" Scan ", Style::default().fg(Color::Rgb(200, 100, 255)).add_modifier(Modifier::BOLD)));
             let scan_p = Paragraph::new(
                 dash.scan_lines.iter().map(|l| Line::from(l.clone())).collect::<Vec<_>>(),
             )
-            .block(Block::default().borders(Borders::ALL).title(" Scan "))
-            .wrap(Wrap { trim: false });
-            frame.render_widget(scan_p, top[2]);
+            .block(scan_block)
+        .wrap(Wrap { trim: false })
+        .scroll((dash.scan_scroll as u16, 0));
+        frame.render_widget(scan_p, top[2]);
 
             // Bottom 1/3: terminal (left) + commands (right)
             let bottom = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(66),
-                    Constraint::Percentage(34),
-                ])
-                .split(outer[1]);
+            .direction(Direction::Horizontal)
+            .constraints([
+            Constraint::Percentage(66),
+            Constraint::Percentage(34),
+            ])
+            .split(outer[1]);
 
-            // Terminal area: history + input
-            let term_area = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Min(1),
-                    Constraint::Length(1),
-                ])
-                .split(bottom[0]);
+            // Terminal area: show last N history lines + input at bottom (fixed, no scroll)
+            let term_height = bottom[0].height.saturating_sub(2) as usize; // Account for borders
+            let input_lines = 2usize; // Blank line + input line
+            let max_history = term_height.saturating_sub(input_lines);
+            
+            let history_start = term_history.len().saturating_sub(max_history);
+            let visible_history: Vec<Line> = term_history[history_start..]
+            .iter()
+                .map(|l| Line::from(l.clone()))
+            .collect();
+            
+            let mut terminal_content = visible_history;
+            // Pad with empty lines to push input to bottom
+            let current_lines = terminal_content.len();
+            for _ in current_lines..max_history {
+                terminal_content.push(Line::from(""));
+        }
+        terminal_content.push(Line::from(""));
+        terminal_content.push(Line::from(vec![
+            Span::styled("> ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw(&dash.command_input),
+            Span::styled("█", Style::default().fg(Color::Green)),
+        ]));
 
-            let history_lines: Vec<Line> = term_history.iter().map(|l| Line::from(l.clone())).collect();
-            frame.render_widget(
-                Paragraph::new(history_lines)
-                    .block(Block::default().borders(Borders::ALL).title(" Terminal "))
-                    .wrap(Wrap { trim: false }),
-                term_area[0],
-            );
-
-            let input_line = Line::from(vec![
-                Span::styled(" > ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(&dash.command_input),
-                Span::styled("█", Style::default().fg(Color::Green)),
-            ]);
-            frame.render_widget(Paragraph::new(input_line), term_area[1]);
+        let term_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Rgb(0, 255, 135))) // Bright green
+            .title(Span::styled(" Terminal ", Style::default().fg(Color::Rgb(0, 255, 135)).add_modifier(Modifier::BOLD)));
+        
+        frame.render_widget(
+            Paragraph::new(terminal_content)
+                .block(term_block)
+                .wrap(Wrap { trim: false }),
+            bottom[0],
+        );
 
             // Commands reference
             let help_lines = vec![
@@ -853,10 +883,15 @@ async fn run_tui_loop(
                 Line::from(vec![Span::styled("  help", Style::default().fg(Color::Yellow))]),
                 Line::from(vec![Span::styled("  quit", Style::default().fg(Color::Yellow))]),
             ];
-            frame.render_widget(
-                Paragraph::new(help_lines).block(Block::default().borders(Borders::ALL).title(" Commands ")),
-                bottom[1],
-            );
+            let commands_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Rgb(0, 255, 135))) // Bright green
+                .title(Span::styled(" Commands ", Style::default().fg(Color::Rgb(0, 255, 135)).add_modifier(Modifier::BOLD)));
+
+        frame.render_widget(
+            Paragraph::new(help_lines).block(commands_block),
+            bottom[1],
+        );
         })?;
 
         if event::poll(std::time::Duration::from_millis(50))? {
@@ -876,9 +911,40 @@ async fn run_tui_loop(
                             dash.command_input.pop();
                         }
                         KeyCode::Char(c) => {
-                            dash.command_input.push(c);
+                        dash.command_input.push(c);
                         }
-                        _ => {}
+                        KeyCode::Up => {
+                        dash.scroll_status_up();
+                        dash.scroll_velocity_up();
+                        dash.scroll_scan_up();
+                    }
+                    KeyCode::Down => {
+                        dash.scroll_status_down();
+                        dash.scroll_velocity_down();
+                        dash.scroll_scan_down();
+                    }
+                    KeyCode::PageUp => {
+                        // Scroll all panes up by 5 lines
+                        for _ in 0..5 {
+                            dash.scroll_status_up();
+                            dash.scroll_velocity_up();
+                            dash.scroll_scan_up();
+                        }
+                    }
+                    KeyCode::PageDown => {
+                        // Scroll all panes down by 5 lines
+                        for _ in 0..5 {
+                            dash.scroll_status_down();
+                            dash.scroll_velocity_down();
+                            dash.scroll_scan_down();
+                        }
+                    }
+                    KeyCode::Home => {
+                        dash.status_scroll = 0;
+                        dash.velocity_scroll = 0;
+                        dash.scan_scroll = 0;
+                    }
+                    _ => {}
                     }
                 }
             }

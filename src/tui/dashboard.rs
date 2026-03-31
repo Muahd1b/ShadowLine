@@ -8,6 +8,9 @@ pub struct Dashboard {
     pub status_lines: Vec<String>,
     pub scan_lines: Vec<String>,
     pub command_input: String,
+    pub status_scroll: usize,
+    pub velocity_scroll: usize,
+    pub scan_scroll: usize,
 }
 
 impl Dashboard {
@@ -37,6 +40,45 @@ impl Dashboard {
                 "  packages and agent skills.".to_string(),
             ],
             command_input: String::new(),
+            status_scroll: 0,
+            velocity_scroll: 0,
+            scan_scroll: 0,
+        }
+    }
+
+    pub fn scroll_status_up(&mut self) {
+        if self.status_scroll > 0 {
+            self.status_scroll -= 1;
+        }
+    }
+
+    pub fn scroll_status_down(&mut self) {
+        if self.status_scroll < self.status_lines.len().saturating_sub(1) {
+            self.status_scroll += 1;
+        }
+    }
+
+    pub fn scroll_velocity_up(&mut self) {
+        if self.velocity_scroll > 0 {
+            self.velocity_scroll -= 1;
+        }
+    }
+
+    pub fn scroll_velocity_down(&mut self) {
+        if self.velocity_scroll < self.velocity_lines.len().saturating_sub(1) {
+            self.velocity_scroll += 1;
+        }
+    }
+
+    pub fn scroll_scan_up(&mut self) {
+        if self.scan_scroll > 0 {
+            self.scan_scroll -= 1;
+        }
+    }
+
+    pub fn scroll_scan_down(&mut self) {
+        if self.scan_scroll < self.scan_lines.len().saturating_sub(1) {
+            self.scan_scroll += 1;
         }
     }
 
